@@ -1,0 +1,215 @@
+---
+title: "Data 622 Test 1"
+author: "Sheryl Piechocki"
+date: "11/13/2020"
+output: pdf_document
+---
+
+
+Description: Use the dataset you used for HW-1 (Blue/Black)  
+  
+(A) Run Bagging (ipred package)   
+(B) Run LOOCV (jacknife) for the same dataset  
+Find the average of the test metric(s).  
+Compare (A), (B) above with the results you obtained in HW-1  and write 3 sentences explaining the observed difference.  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##  Load Data  
+**Load the data from a csv file and take a look at a summary of the records.**  
+```{r load-data, warning=FALSE, message=FALSE}
+path <- "C:/Users/spiec/Documents/Sheryl/CUNY MSDS/DATA622/Data/hw1data.csv"
+
+loadData <- function(csvfile) { read.csv(csvfile,head=T,sep=',',stringsAsFactors=F) }
+tst1data <- loadData(path)
+tst1data$Y <- as.factor(tst1data$Y)
+tst1data$X <- as.factor(tst1data$X)
+tst1data$label <- as.factor(tst1data$label)
+summary(tst1data)
+```
+  
+**Split the data 70/30 into train and test sets**
+```{r split-data, warning=FALSE, message=FALSE}
+set.seed(777)
+tst1data$label <- as.integer(ifelse(tst1data$label == "BLACK", 0, 1))
+testidx <- sample(1:nrow(tst1data), 0.30*nrow(tst1data), replace=F)
+train.data <- tst1data[-testidx,]
+test.data <- tst1data[testidx,]
+table(train.data$label) 
+summary(train.data)
+table(test.data$label) 
+summary(test.data)
+
+```
+  
+#### I will be focusing on the Naive Bayes and kNN models, since the logistic regression from homework 1 did not result in any statistically significant features.  
+  
+
+##  Base Naive Bayes Model  
+**Run the base Naive Bayes Model to start**
+```{r nb-train, message=FALSE, warning=FALSE}
+library(e1071)
+nb.trmodel <- naiveBayes(label~., data=train.data)
+
+nb.tr_pred <- predict(nb.trmodel, train.data[,-c(3)], type='raw')
+nb.tr_class <- unlist(apply(round(nb.tr_pred), 1, which.max))-1
+nb.tr_tbl <- table(train.data[[3]], nb.tr_class)
+nb.tr_cfm <- caret::confusionMatrix(nb.tr_tbl)
+nb.tr_cfm
+tr.nb_acc <- nb.tr_cfm$overall['Accuracy']
+
+nb.ts_pred <- predict(nb.trmodel, test.data[,-c(3)], type='raw')
+nb.ts_class <- unlist(apply(round(nb.ts_pred), 1, which.max))-1
+nb.ts_tbl <- table(test.data[[3]], nb.ts_class)
+nb.cfm.test <-caret::confusionMatrix(nb.ts_tbl)
+nb.cfm.test
+nb_acc <- nb.cfm.test$overall['Accuracy']
+
+```
+  
+## kNN Base Model  
+**Run a kNN Base Model**  
+```{r knn-test, message=FALSE, warning=FALSE}
+library(caret)
+knn.trmodel <- knn3(as.factor(label) ~., data = train.data, k = 3)
+
+knn.tr_class <- predict(knn.trmodel, newdata = train.data, type = "class")
+knn.tr_pred.prob <- predict(knn.trmodel, newdata = train.data, type = "prob")
+knn.tr_tbl <- table(train.data[[3]], knn.tr_class)
+knn.cfm.tr <-caret::confusionMatrix(knn.tr_tbl)
+knn.cfm.tr
+tr.knn_acc <- knn.cfm.tr$overall['Accuracy']
+
+knn.ts_class <- predict(knn.trmodel, newdata = test.data, type = "class")
+knn.ts_pred.prob <- predict(knn.trmodel, newdata = test.data, type = "prob")
+knn.ts_tbl <- table(test.data[[3]], knn.ts_class)
+knn.cfm.test <-caret::confusionMatrix(knn.ts_tbl)
+knn.cfm.test
+
+knn_acc <- knn.cfm.test$overall['Accuracy']
+
+```
+## Part A:  Bagging  
+**Make use of Dr. Raman's script for bagging using Naive Bayes** 
+```{r nb-bagging, warning=FALSE, message=FALSE}
+library('e1071')
+sdf<-train.data
+srunModel<-function(sdf) {naiveBayes(label~.,data=sdf[sample(1:nrow(sdf),nrow(sdf),replace=T),])}
+slapplyrunmodel<-function(x)srunModel(sdf)
+
+system.time(smodels<-lapply(1:100,slapplyrunmodel))
+
+sbagging_preds<-lapply(smodels,FUN=function(M,D=test.data[,-c(3)])predict(M,D,type='raw'))
+
+sbagging_cfm<-lapply(sbagging_preds,FUN=function(P,A=test.data[[3]])
+{spred_class<-unlist(apply(round(P),1,which.max))-1
+  spred_tbl<-table(factor(A, levels = (0:1)),factor(spred_class, levels = (0:1)))
+  spred_cfm<-caret::confusionMatrix(spred_tbl)
+  spred_cfm
+})
+
+sbagging.perf<-as.data.frame(do.call('rbind',lapply(sbagging_cfm,FUN=function(cfm)c(cfm$overall,cfm$byClass))))
+
+sbagging.perf.mean<-apply(sbagging.perf[-c(2,6:7, 15:18)],2,mean,na.rm = TRUE)
+sbagging.perf.var<-apply(sbagging.perf[-c(2,6:7, 15:18)],2,sd, na.rm = TRUE)
+  
+sbagging.perf.mean <- as.data.frame(sbagging.perf.mean)
+sbagging.perf.mean
+```
+
+**Now, perform bagging using the function from the ipred package.  This function develops bootstrap aggregated classification trees.**  
+
+```{r ipred-bagging, warning=FALSE, message=FALSE}
+set.seed(2)
+library(ipred)
+ipred.bag <- bagging(as.factor(label)~., data = train.data, nbagg = 100, coob=TRUE)
+print(ipred.bag)
+
+ipred.pred <- predict(ipred.bag, test.data[,-c(3)])
+ipred.tbl<-table(ipred.pred, test.data$label)
+ipred.cfm <- caret::confusionMatrix(ipred.tbl)
+ipred.cfm
+```
+  
+## Part B:  Leave One Out Cross Validation (LOO-CV)  
+**Make use of Dr. Raman's script for leave one out cv using Naive Bayes** 
+  
+```{r nb-loocv, warning=FALSE, message=FALSE}
+N<-nrow(train.data)
+
+scv_df<-do.call('rbind',lapply(1:N,FUN=function(idx,data=train.data) {
+  m<-naiveBayes(label~.,data=data[-idx,]) 
+  p<-predict(m,data[idx,-c(3)],type='raw') 
+  pc<-unlist(apply(round(p),1,which.max))-1 
+  list(fold=idx,m=m,predicted=pc,actual=data[idx,c(3)]) 
+  }
+))
+
+scv_df<-as.data.frame(scv_df)
+
+loocv_tbl<-table(as.numeric(scv_df$actual),as.numeric(scv_df$predicted))
+loocv_caret_cfm<-caret::confusionMatrix(loocv_tbl)
+
+tstloocv.perf<-as.data.frame(do.call('cbind',lapply(scv_df$m,FUN=function(m,data=test.data)
+{
+  v<-predict(m,data[,-c(3)],type='raw')
+  lbllist<-unlist(apply(round(v),1,which.max))-1
+}
+  )))
+
+np<-ncol(tstloocv.perf)
+loo.predclass<-unlist(apply(tstloocv.perf,1,FUN=function(v){ ifelse(sum(v[2:length(v)])/np<0.5,0,1)}))
+loocvtbl<-table(test.data[,c(3)],loo.predclass)
+loocv_cfm<-caret::confusionMatrix(loocvtbl)
+loocv_cfm
+
+```
+  
+**Make use of Dr. Raman's script for leave one out cv using kNN** 
+  
+```{r knn-loocv, warning=FALSE, message=FALSE}
+N<-nrow(train.data)
+
+kcv_df<-do.call('rbind',lapply(1:N,FUN=function(idx,data=train.data) {
+  m<-knn3(as.factor(label) ~., k = 3, data=data[-idx,]) 
+  p<-predict(m,data[idx,-c(3)],type='prob') 
+  pc<-unlist(apply(round(p),1,which.max))-1 
+  list(fold=idx,m=m,predicted=pc,actual=data[idx,c(3)]) 
+  }
+))
+
+kcv_df<-as.data.frame(kcv_df)
+
+k.loocv_tbl<-table(as.numeric(kcv_df$actual),as.numeric(kcv_df$predicted))
+k.loocv_caret_cfm<-caret::confusionMatrix(k.loocv_tbl)
+
+k.tstloocv.perf<-as.data.frame(do.call('cbind',lapply(kcv_df$m,FUN=function(m,data=test.data)
+{
+  v<-predict(m,data[,-c(3)],type='prob')
+  lbllist<-unlist(apply(round(v),1,which.max))-1
+}
+  )))
+
+k.np<-ncol(k.tstloocv.perf)
+k.loo.predclass<-unlist(apply(k.tstloocv.perf,1,FUN=function(v){ ifelse(sum(v[2:length(v)])/np<0.5,0,1)}))
+k.loocvtbl<-table(test.data[,c(3)],k.loo.predclass)
+k.loocv_cfm<-caret::confusionMatrix(k.loocvtbl)
+k.loocv_cfm
+
+```
+  
+**Print results for comparison**  
+```{r comparing-metrics, warning=FALSE, message=FALSE}
+print(paste('Base NB: ', nb_acc))
+print(paste('NB Bagging:',sbagging.perf.mean[1,1]))
+print(paste('NB LOO-CV:',loocv_cfm$overall[1]))
+print(paste('Base kNN:', knn_acc))
+print(paste('ipred Bagging:',ipred.cfm$overall[1]))
+print(paste('kNN LOO-CV:', k.loocv_cfm$overall[1]))
+```
+  
+## Conclusion  
+  
+The base Naive Bayes model yields an accuracy of 0.7, but bagging on Naive Bayes drops accuracy to 0.66, while LOO-CV on Naive Bayes maintains the 0.7 accuracy from the base model.  Similarly, for kNN, the base model and the LOO-CV models have the same accuracy of 0.8. The bagging model using the ipred package has accuracy of 0.6.  The bagging models have not increased accuracy.  Bias is increased most likely due to the potential replication of some observations in the bagged samples with such a small sample size (i.e. some observations may not be included in the bagged sample and others may be included more than once).  Bagged models usually result in decreased variance.  If bias increases, variance decreases.  The LOO-CV models give the same accuracy as the base models.  In this case we are training on all but one observation, iteratively.  This method makes use of all of the data and generally leads to decreased bias.  With so few observations here we just maintain the accuracy.   
